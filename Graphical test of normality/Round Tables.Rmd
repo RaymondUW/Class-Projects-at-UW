@@ -1,0 +1,10 @@
+---
+title: "Round Tables"
+author: "Mingyang Xue"
+date: "9/8/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+tab_ts <- read.csv("ts_powers_n=100.csv")
+```
