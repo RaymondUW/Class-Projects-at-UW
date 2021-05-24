@@ -1,0 +1,190 @@
+---
+title: "draft2"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Data Exploration
+```{r setup}
+#setwd("~/Documents/Junior/STAT/STAT403/Labs") #require(rpart) 
+setwd("~/Desktop/STAT403")
+require(dplyr)
+data = read.csv('data.csv')
+
+head(data)
+```
+
+
+```{r names}
+# produce all feature names
+names(data)
+```
+### Distribution
+```{r summary}
+diagnosis = data$diagnosis
+data_M = subset(data, diagnosis == 'M')
+data_B = subset(data, diagnosis == 'B')
+
+library(Hmisc) # install.packages('acepack') # install.packages("Hmisc")
+hist.data.frame(data)
+```
+## Top Correlated features respect to malignant
+```{r corr}
+names_data = rep(NA,ncol(data))
+corr_f <- function(x, y){
+  return(cor(x,y))
+}
+
+
+correlation = rep(NA,ncol(data)-2)
+feature_names = rep(NA,ncol(data)-2)
+for (i in 3:ncol(data)){
+  names_data = names(data)[i]
+  feature_names[i-2] = names_data
+  curr_col = data %>% pull(names_data)
+  diagnosis_col = data %>% pull(diagnosis)
+  correlation[i-2] = cor(curr_col, diagnosis_col == 'M')
+}
+
+corr_df <- data.frame(feature_names,correlation)
+sort_corr_df <- corr_df[order(-abs(correlation)),]
+sort_corr_df[which(sort_corr_df[,2]>0.7),1]
+```
+## Malignant Vs Benign Visulization
+```{r dist}
+library(ggplot2)
+
+dist_plot <- function(feature, name){
+  dist_plot <-ggplot(data, aes(x=feature, fill=(diagnosis == 'M'))) +
+    geom_histogram(alpha=.5,position="identity") 
+  print(dist_plot + labs(x = name, fill = "Malignant"))
+}
+
+
+# all mean features
+for (i in 3:12){ # change 12 to (ncol(data) - 1) if need to view all features
+  names_data = names(data)[i]
+  curr_col = data %>% pull(names_data)
+  dist_plot(curr_col, names_data)
+}
+
+```
+
+### permutation test
+
+Now we want to investgate whether there is a difference between two groups of individuals(malignant and benign) in each features
+
+```{r hypothesis}
+hypo_test <- function(data_M, data_B){
+  dataM_med = median(data_M)
+  dataB_med = median(data_B)
+  diff_med = abs(dataM_med-dataB_med)
+  n_M = length(data_M)
+  n_B = length(data_B)
+  n = n_M+n_B
+  data_pull = c(data_M, data_B)
+
+  N_per = 10000
+  diff_med_per = rep(NA, N_per)
+  for(i_per in 1:N_per){
+    w_per = sample(n, n, replace=F)
+    data_per = data_pull[w_per]
+    dataM_new = data_per[1:n_M]
+    dataB_new = data_per[(n_M+1):n]
+    diff_new = abs(median(dataM_new)-median(dataB_new))
+    diff_med_per[i_per] = diff_new
+  }
+  return((length(which(diff_med_per >= diff_med))+1)/(N_per+1))
+}
+
+```
+
+```{r hypo test2}
+feature_names = rep(NA,ncol(data)-2)
+hypo_test_result = rep(NA,ncol(data)-2)
+for (i in 3:ncol(data)){
+  names_data = names(data)[i]
+  feature_names[i-2] = names_data
+  curr_col_M = data_M %>% pull(names_data)
+  curr_col_B = data_B %>% pull(names_data)
+  hypo_test_result[i-2] <- hypo_test(curr_col_M, curr_col_B)
+}
+hypo_df <- data.frame(feature_names,hypo_test_result)
+hypo_df
+```
+
+```{r hypo_3}
+exclude_features <- hypo_df %>% filter(hypo_test_result > 0.05)
+exclude_features
+include_features <- hypo_df %>% filter(hypo_test_result <= 0.05)
+include_features
+```
+
+## Model Selection
+```{r data}
+data = data[,-length(data)]
+```
+
+```{r model selection}
+library(leaps)
+
+# set the maximum number of predictors we might use
+max_p = 31
+fit.forward = regsubsets(diagnosis~.-diagnosis, data=data, nbest = 1, nvmax = max_p, method = "forward")
+fit.summ = summary(fit.forward)
+
+# compare three types of selection criteria: BIC, adjusted R^2, Mallow's C_p
+(p = which(fit.summ$bic == min(fit.summ$bic)))
+which(fit.summ$adjr2 == max(fit.summ$adjr2))
+which(fit.summ$cp == min(fit.summ$cp))
+# I would choose the model with 11 predictors i.e. the 1st one
+(coefficients = coef(fit.forward, id = p))
+```
+
+## logistic regression
+
+```{r logistic regression}
+set.seed(1234)
+#df = data[,c("compactness_mean","concave.points_mean","radius_se","smoothness_se", "compactness_se","radius_worst","texture_worst","area_worst", "concave.points_worst", "symmetry_worst","fractal_dimension_worst","diagnosis")]
+(samp_size = nrow(data))
+# randomly select 80% as training set, 20% as testing set
+train_ind = sample(seq(nrow(data)),floor(0.8*samp_size),replace = FALSE)
+train_set = data[train_ind,]
+test_set = data[-train_ind,]
+
+# fit the 1st logistic regression model
+logistic.fit <- glm(diagnosis ~ compactness_mean+concave.points_mean+radius_se+smoothness_se+compactness_se+radius_worst+texture_worst+area_worst+concave.points_worst+symmetry_worst+fractal_dimension_worst, data = train_set, family = binomial(link = "logit"))
+#summary(logistic.fit)
+
+# fit the 2nd logistic regression model
+logistic.fit2 <- glm(diagnosis ~ concave.points_worst+perimeter_worst+concave.points_mean+radius_worst+perimeter_mean+area_worst+radius_mean+area_mean,data = train_set,family = binomial(link="logit"))
+```
+
+```{r logistic regression prediction 1}
+logistic.prob <- predict(logistic.fit2, type = "response")
+logistic.predictions <- rep(NA, length(logistic.prob))
+for (i in 1:length(logistic.prob)){
+  if (logistic.prob[i] >= 0.5){
+    logistic.predictions[i] = "M"
+  } else{
+    logistic.predictions[i] = "B"
+  }
+}
+
+# prediction accuracy in training set
+length(which(logistic.predictions==train_set$diagnosis))/nrow(train_set)
+
+testing.prob <- predict(logistic.fit2, newdata = test_set)
+testing.predictions <- rep(NA, length(testing.prob))
+for (i in 1:length(testing.prob)){
+  if (testing.prob[i] >= 0.5){
+    testing.predictions[i] = "M"
+  } else{
+    testing.predictions[i] = "B"
+  }
+}
+
+#prediction accuracy in testing set
+length(which(testing.predictions==test_set$diagnosis))/nrow(test_set)
+```
